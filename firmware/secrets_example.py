@@ -1,0 +1,5 @@
+"""Copy to secrets.py; keep this file out of GitHub."""
+WIFI_SSID = 'REPLACE_WITH_WIFI_SSID'
+WIFI_PASSWORD = 'REPLACE_WITH_WIFI_PASSWORD'
+API_BASE_URL = 'https://YOUR-SERVICE.onrender.com'
+DEVICE_TOKEN = 'REPLACE_WITH_DEVICE_TOKEN'

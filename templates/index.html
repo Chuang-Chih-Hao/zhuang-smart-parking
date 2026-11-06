@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf }}"><meta name="theme-color" content="#0a1325">
+  <title>莊停車場 · 管理控制台</title>
+  <link rel="stylesheet" href="{{ url_for('static',filename='style.css') }}">
+  <script src="{{ url_for('static',filename='app.js') }}" defer></script>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" href="/"><span class="brand-mark">P</span><span><strong>莊停車場</strong><small>SMART PARKING</small></span></a>
+    <div class="sidebar-group">控制中心</div>
+    <nav aria-label="主選單">
+      <button class="nav-item active" data-page="overview"><span>▦</span> 即時總覽</button>
+      <button class="nav-item" data-page="passage"><span>⇄</span> 通道監控</button>
+      <button class="nav-item" data-page="sim"><span>◈</span> 感測器模擬</button>
+      <button class="nav-item" data-page="vehicles"><span>▤</span> 車牌白名單</button>
+      <button class="nav-item" data-page="records"><span>◷</span> 進出紀錄</button>
+      <button class="nav-item" data-page="settings"><span>⚙</span> 系統設定</button>
+    </nav>
+    <div class="aside-bottom"><div class="small-status"><span class="pulse"></span> Flask 監控服務</div><a href="/display" target="_blank" rel="noopener">↗ 開啟對外車位看板</a><button id="logout" class="text-button">登出管理員</button></div>
+  </aside>
+  <main class="workspace">
+    <header class="topbar"><button id="mobileMenu" aria-label="切換選單" class="mobile-menu">☰</button><div><div class="eyebrow">PARKING OPERATIONS</div><h1 id="pageTitle">即時總覽</h1></div><div class="top-right"><span id="modeBadge" class="pill">讀取中</span><span class="clock" id="clock">--:--:--</span></div></header>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <section id="page-overview" class="page active">
+      <div class="headline"><div><h2>停車場運作概況</h2><p>即時掌握停車位占用、通道安全與系統狀態</p></div><span class="softlabel" id="syncInfo">● 資料讀取中</span></div>
+      <div class="metrics">
+        <div class="metric"><span class="metric-label">總車位 <span class="metric-icon">▦</span></span><strong id="totalSpaces">4</strong><small>固定容量</small></div>
+        <div class="metric accent"><span class="metric-label">剩餘車位 <span class="metric-icon">◈</span></span><strong id="available">--</strong><small>已計入待入場預留數</small></div>
+        <div class="metric"><span class="metric-label">實體占用 <span class="metric-icon">▣</span></span><strong id="occupied">--</strong><small>P1～P4 感測結果</small></div>
+        <div class="metric"><span class="metric-label">在場車輛 <span class="metric-icon">▤</span></span><strong id="activeVisits">--</strong><small>已完成進場紀錄</small></div>
+      </div>
+      <div class="content-grid">
+        <div class="panel parking-panel"><div class="panel-head"><div><h3>車位配置圖</h3><p>四格車位 · 點擊車位可在模擬模式切換</p></div><span class="legend"><i class="dot green"></i> 空位 <i class="dot red"></i> 已占用</span></div>
+          <div class="lot"><div class="lot-spaces">
+            <button class="space" data-sensor="P1"><span class="space-number">P1</span><span class="car-glyph">▰</span><span class="space-state">等待</span></button>
+            <button class="space" data-sensor="P2"><span class="space-number">P2</span><span class="car-glyph">▰</span><span class="space-state">等待</span></button>
+            <button class="space" data-sensor="P3"><span class="space-number">P3</span><span class="car-glyph">▰</span><span class="space-state">等待</span></button>
+            <button class="space" data-sensor="P4"><span class="space-number">P4</span><span class="car-glyph">▰</span><span class="space-state">等待</span></button>
+          </div><div class="lot-road"><span>↕</span><span>雙向通行車道</span><span>↕</span></div><div class="lot-gate"><div class="gate-bar"></div><span id="gateDiagram">閘門：--</span></div><div class="lot-entrance">↑ 入口 / 出口 共用</div></div>
+          <div id="mismatch" class="inline-warning hidden">⚠ 感測占用數與在場進出紀錄不同，請確認車輛是否尚未停妥，或感測器是否異常。</div>
+        </div>
+        <div class="right-stack"><div class="panel"><div class="panel-head"><div><h3>通道即時狀態</h3><p>獨立方向偵測與防夾監控</p></div></div><div class="sensor-list"><div><span>A · 外側方向</span><b id="stateA">--</b></div><div><span>B · 內側方向</span><b id="stateB">--</b></div><div><span>S · 閘門防夾</span><b id="stateS">--</b></div><div><span>閘門</span><b id="gateState">--</b></div><div><span>ESP32</span><b id="deviceState">--</b></div></div></div>
+        <div class="panel events-panel"><div class="panel-head"><div><h3>最新系統事件</h3><p>自動記錄感測變化及通行結果</p></div></div><div class="event-list" id="events"><div class="empty">正在讀取...</div></div></div></div>
+      </div>
+    </section>
+    <section id="page-passage" class="page"><div class="headline"><div><h2>共用閘門通道</h2><p>A → B 為進場；B → A 為離場；S 只用來保護閘門安全</p></div></div>
+      <div class="content-grid"><div class="panel"><div class="panel-head"><h3>通行驗證</h3><span class="pill" id="phaseBadge">IDLE</span></div><div class="diagram"><div class="diagram-node">停車場內部</div><div class="diagram-node inner">B · 內側方向感測</div><div class="diagram-node gate">↕ 共用閘門 / S 防夾</div><div class="diagram-node outer">A · 外側方向感測</div><div class="diagram-node">外部道路</div></div><div class="form-row"><label for="passPlate">車牌號碼</label><input id="passPlate" type="text" placeholder="例如 ABC-1234" maxlength="12" autocomplete="off"></div><div class="action-row"><button id="authorize" class="btn primary">① 驗證車牌</button><button id="gateOpen" class="btn">② 開啟閘門</button><button id="gateClose" class="btn muted">③ 安全關閘</button></div><div class="hint">請先觸發 A 或 B，再驗證車牌與開閘。等另一側感測器觸發、A/B/S 全部清空後，系統才會確認進場或離場。</div></div>
+      <div class="panel"><div class="panel-head"><h3>目前通行資訊</h3></div><div class="detail-list"><div>推定方向 <b id="passDirection">--</b></div><div>流程階段 <b id="passPhase">--</b></div><div>授權車牌 <b id="permitPlate">--</b></div><div>最近辨識 <b id="lastPlate">--</b></div></div><div id="passAlert" class="inline-warning hidden"></div><div class="notice"><strong>安全原則</strong><p>只要 A、B、S 任一感測點受阻，就不允許關閘。ESP32 實體模式還必須在本機再次檢查 S，不能依賴雲端指令保護防夾。</p></div></div></div>
+    </section>
+    <section id="page-sim" class="page"><div class="headline"><div><h2>感測器模擬器</h2><p>在不接 ESP32 的狀況下測試全部七個感測點</p></div><button id="resetSim" class="btn muted">重設感測器</button></div><div class="panel"><div class="panel-head"><h3>七個模擬感測點</h3><span class="softlabel">只有 SIM 模式可以操作</span></div><div id="sensorButtons" class="sensor-grid"></div><div class="notice"><strong>測試一輛車進場</strong><p>切換 A 為有車 → 前往「通道監控」輸入白名單車牌並驗證 → 開閘 → B 切為有車 → 依序清除 A、B、S → 進場完成 → 安全關閘。離場請改為 B 先觸發，再觸發 A。</p></div></div></section>
+    <section id="page-vehicles" class="page"><div class="headline"><div><h2>車牌白名單</h2><p>只有啟用的車牌可以完成進場驗證</p></div></div><div class="panel"><form id="addPlateForm" class="add-form"><input id="newPlate" required placeholder="車牌 ABC-1234" maxlength="12" autocomplete="off"><input id="plateNote" placeholder="備註（選填）" maxlength="120"><button class="btn primary" type="submit">＋ 新增車牌</button></form><div class="table-wrap"><table><thead><tr><th>車牌</th><th>備註</th><th>狀態</th><th>操作</th></tr></thead><tbody id="platesTable"><tr><td colspan="4">載入中...</td></tr></tbody></table></div></div></section>
+    <section id="page-records" class="page"><div class="headline"><div><h2>車輛進出紀錄</h2><p>只記錄經過授權並完成 A/B 通道序列的車輛</p></div><button id="refreshRecords" class="btn muted">重新整理</button></div><div class="panel"><div class="table-wrap"><table><thead><tr><th>車牌</th><th>進場時間</th><th>離場時間</th><th>停留時間</th><th>狀態</th></tr></thead><tbody id="recordsTable"><tr><td colspan="5">載入中...</td></tr></tbody></table></div></div></section>
+    <section id="page-settings" class="page"><div class="headline"><div><h2>系統設定</h2><p>目前模擬優先，未來可切換為 ESP32 回報</p></div></div><div class="content-grid"><div class="panel"><h3>資料來源</h3><p class="subtext">切換至實體模式前，請確定通道安全、閘門關閉，且 ESP32 已完成安全測試。</p><div class="mode-row"><button class="mode-choice" data-mode="SIM"><strong>◈ SIM</strong><span>網頁虛擬感測</span></button><button class="mode-choice" data-mode="HARDWARE"><strong>▣ HARDWARE</strong><span>ESP32 真實回報</span></button></div><div class="hint">實體模式下若 ESP32 離線，網站會顯示離線，並拒絕遠端開關閘門。</div></div><div class="panel"><h3>架構資訊</h3><div class="detail-list"><div>主控制板 <b>ESP32 / MicroPython</b></div><div>停車格 <b>4 格</b></div><div>感測點 <b>7 個：P1–P4、A、B、S</b></div><div>閘門 <b>MG90S / 單一雙向</b></div><div>API <b>Flask JSON / HTTPS</b></div><div>資料庫 <b>SQLite / PostgreSQL</b></div></div></div></div></section>
+    <footer>莊停車場 SMART PARKING · Flask × MicroPython · 課堂模型專案</footer>
+  </main>
+</div>
+</body>
+</html>

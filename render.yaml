@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: zhuang-smart-parking
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --workers 1 --threads 4 --timeout 60 --bind 0.0.0.0:$PORT app:app
+    healthCheckPath: /healthz
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: DEVICE_TOKEN
+        generateValue: true
+      - key: CAMERA_TOKEN
+        generateValue: true
+      - key: SEED_DEMO
+        value: "false"
+      # Add DATABASE_URL manually in Render when a persistent Postgres DB is ready.
+      # No DB is provisioned by this blueprint to avoid surprise charges.
