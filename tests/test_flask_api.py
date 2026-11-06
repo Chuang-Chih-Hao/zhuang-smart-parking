@@ -77,3 +77,26 @@ def test_no_open_without_valid_whitelisted_plate(client):
     assert post('/api/passage/authorize',{'plate':'ABC-1234'}).status_code==200
     assert post('/api/gate/open',{'plate':'XYZ-9999'}).status_code==400
     assert client.get('/api/status',headers=headers).json['gate']=='CLOSED'
+
+
+def test_sim_complete_passage_api_creates_entry_and_exit(client):
+    headers=authenticate(client)
+    def post(path,body):
+        response=client.post(path,json=body,headers=headers)
+        assert response.status_code==200, response.json
+        return response.json
+    assert client.post('/api/sim/complete-passage',json={},headers=headers).status_code==400
+    post('/api/sim/sensors',{'sensor':'A','detected':True})
+    post('/api/passage/authorize',{'plate':'ABC-1234'})
+    post('/api/gate/open',{'plate':'ABC-1234'})
+    result=post('/api/sim/complete-passage',{})
+    assert result['direction']=='ENTRY' and result['recorded']
+    assert len(client.get('/api/records',headers=headers).json['items'])==1
+    post('/api/gate/close',{})
+    post('/api/sim/sensors',{'sensor':'B','detected':True})
+    post('/api/passage/authorize',{'plate':'ABC-1234'})
+    post('/api/gate/open',{'plate':'ABC-1234'})
+    result=post('/api/sim/complete-passage',{})
+    assert result['direction']=='EXIT'
+    assert client.get('/api/records',headers=headers).json['items'][0]['left_at'] is not None
+    assert client.get('/api/status',headers=headers).json['active_visits']==0

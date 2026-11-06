@@ -45,6 +45,9 @@ function paint(s) {
   $('resetAllSim').disabled=s.mode!=='SIM';
   const unlocked=s.phase==='WAIT_SECOND' && !!s.permit_plate && s.permit_plate===$('passPlate').value.trim().toUpperCase();
   $('gateOpen').disabled=!unlocked;
+  $('completeSimPassage').disabled=!(s.mode==='SIM' && s.gate==='OPEN' &&
+    ['WAIT_SECOND','CROSSING'].includes(s.phase) && !!s.permit_plate &&
+    s.permit_plate===$('passPlate').value.trim().toUpperCase() && !s.sensors.S);
   const lock=$('gateLockNotice');
   lock.classList.toggle('hidden',unlocked || s.gate==='OPEN');
   lock.textContent=s.phase==='IDLE'?'🔒 請先觸發 A 或 B，再完成白名單驗證。':'🔒 尚未通過白名單驗證，或輸入車牌與授權不一致：禁止開閘。';
@@ -64,6 +67,13 @@ $('mobileMenu').addEventListener('click',()=>document.querySelector('.sidebar').
 $('authorize').addEventListener('click',async()=>{const r=await change('/api/passage/authorize',{plate:$('passPlate').value});if(r)showToast(`${r.plate}：${r.direction==='ENTRY'?'進場':'離場'}驗證通過`);});
 $('passPlate').addEventListener('input',()=>{if(last)paint(last);});
 $('gateOpen').addEventListener('click',async()=>{const r=await change('/api/gate/open',{plate:$('passPlate').value});if(r)showToast('開閘操作已送出');});
+$('completeSimPassage').addEventListener('click',async()=>{
+  const result=await change('/api/sim/complete-passage',{});
+  if(result){
+    await refreshRecords();
+    showToast(result.plate+(result.direction==='ENTRY'?' 進場':' 離場')+'已完成，進出紀錄已儲存');
+  }
+});
 $('gateClose').addEventListener('click',async()=>{const r=await change('/api/gate/close',{});if(r)showToast('關閘操作已送出');});
 $('resetSim').addEventListener('click',async()=>{if(confirm('確定重設模擬感測器與閘門？進出紀錄不會刪除。')){await change('/api/sim/reset',{});}});
 $('resetAllSim').addEventListener('click',async()=>{

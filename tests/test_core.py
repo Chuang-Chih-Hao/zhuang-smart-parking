@@ -1,5 +1,7 @@
 import tempfile
 from pathlib import Path
+from datetime import timedelta
+from parking.models import SystemState, utcnow
 import pytest
 from parking.core import ParkingController, DEFAULT_DEMO_PLATES
 
@@ -160,3 +162,61 @@ def test_full_reset_forbidden_in_hardware(ctl):
     ctl.mode('HARDWARE')
     with pytest.raises(ValueError,match='模擬模式'):
         ctl.reset_all_sim()
+
+
+def test_sim_manual_operating_time_does_not_expire_after_50_seconds(ctl):
+    step(ctl,'A',True)
+    with ctl.Session.begin() as db:
+        db.get(SystemState,1).started_at=utcnow()-timedelta(seconds=75)
+    assert ctl.status()['phase']=='WAIT_SECOND'
+    ctl.authorize('ABC-1234')
+    ctl.gate_action('OPEN',client_plate='ABC-1234')
+    step(ctl,'B',True)
+    step(ctl,'A',False)
+    step(ctl,'B',False)
+    assert ctl.status()['active_visits']==1
+    assert ctl.records()[0]['entered_at'] is not None
+
+
+def test_one_click_sim_entry_then_exit_persists_visit(ctl):
+    step(ctl,'A',True)
+    ctl.authorize('ABC-1234')
+    ctl.gate_action('OPEN',client_plate='ABC-1234')
+    outcome=ctl.complete_sim_passage()
+    assert outcome == {'plate':'ABC-1234','direction':'ENTRY','recorded':True}
+    assert ctl.status()['active_visits']==1
+    assert ctl.status()['phase']=='IDLE'
+    assert ctl.status()['sensors']['A'] is False
+    assert ctl.status()['sensors']['B'] is False
+    ctl.gate_action('CLOSE')
+    step(ctl,'P1',True)
+    step(ctl,'B',True)
+    ctl.authorize('ABC-1234')
+    ctl.gate_action('OPEN',client_plate='ABC-1234')
+    outcome=ctl.complete_sim_passage()
+    assert outcome['direction']=='EXIT'
+    assert ctl.status()['active_visits']==0
+    assert ctl.records()[0]['left_at'] is not None
+
+
+def test_one_click_sim_needs_authorization_open_gate_and_clear_safety(ctl):
+    step(ctl,'A',True)
+    with pytest.raises(ValueError,match='驗證白名單'):
+        ctl.complete_sim_passage()
+    ctl.authorize('ABC-1234')
+    with pytest.raises(ValueError,match='開閘'):
+        ctl.complete_sim_passage()
+    ctl.gate_action('OPEN')
+    step(ctl,'S',True)
+    with pytest.raises(ValueError,match='防夾'):
+        ctl.complete_sim_passage()
+    assert ctl.status()['active_visits']==0
+    step(ctl,'S',False)
+    ctl.complete_sim_passage()
+    assert ctl.status()['active_visits']==1
+
+
+def test_one_click_sim_not_available_in_hardware(ctl):
+    ctl.mode('HARDWARE')
+    with pytest.raises(ValueError,match='只有模擬模式'):
+        ctl.complete_sim_passage()

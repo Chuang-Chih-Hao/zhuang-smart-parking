@@ -10,6 +10,10 @@ SENSOR_KEYS = ('P1', 'P2', 'P3', 'P4', 'A', 'B', 'S')
 CAPACITY = 4
 PASSAGE_TIMEOUT_SECONDS = 50
 PERMIT_SECONDS = 90
+# Browser-based simulation requires time to switch pages and operate controls.
+# Never apply these relaxed limits to physical ESP32 control.
+SIM_PASSAGE_TIMEOUT_SECONDS = 600
+SIM_PERMIT_SECONDS = 600
 DEVICE_OFFLINE_SECONDS = 12
 PLATE_RE = re.compile(r'^[A-Z0-9]{2,4}-?[A-Z0-9]{3,5}$')
 DEMO_NOTE = '預設示範車牌（僅供模擬模式使用）'
@@ -82,7 +86,7 @@ class ParkingController:
             st.permit_expires = None
             st.alert = '通行授權已過期，請重新辨識車牌'
             self.event(db, 'EXPIRED', st.alert)
-        if st.phase in ('WAIT_SECOND', 'CROSSING', 'ALERT') and st.started_at and (now-st.started_at).total_seconds() > PASSAGE_TIMEOUT_SECONDS:
+        if st.phase in ('WAIT_SECOND', 'CROSSING', 'ALERT') and st.started_at and (now-st.started_at).total_seconds() > (SIM_PASSAGE_TIMEOUT_SECONDS if st.mode=='SIM' else PASSAGE_TIMEOUT_SECONDS):
             if not st.sensors['A'] and not st.sensors['B'] and not st.sensors['S']:
                 self.event(db, 'TIMEOUT', '通道流程超時，已清除未完成的通行事件')
                 self.clear_passage(st)
@@ -260,6 +264,53 @@ class ParkingController:
             if st.phase=='CROSSING' and not st.sensors['A'] and not st.sensors['B'] and not st.sensors['S']:
                 self.finish_crossing(db,st)
 
+    def complete_sim_passage(self):
+        """Walk a verified simulated vehicle across the remaining sensors atomically.
+
+        This is a browser-only test convenience; it never commands ESP32 hardware.
+        It cannot fabricate a crossing without a valid whitelist authorization and
+        previously opened simulated gate.
+        """
+        with self.lock, self.Session.begin() as db:
+            st = db.get(SystemState, 1)
+            if st.mode != 'SIM':
+                raise ValueError('只有模擬模式可以自動完成通行')
+            self.expire(db, st)
+            if (st.phase not in ('WAIT_SECOND', 'CROSSING')
+                    or st.gate != 'OPEN'
+                    or not st.permit_plate
+                    or not st.permit_expires
+                    or st.permit_expires < utcnow()):
+                raise ValueError('請先觸發方向感測器、驗證白名單車牌並開閘')
+            if st.sensors.get('S'):
+                raise ValueError('防夾感測器 S 有障礙物，禁止完成通行')
+            allowed = db.scalar(select(Plate.id).where(
+                Plate.plate == st.permit_plate, Plate.enabled.is_(True)))
+            if not allowed:
+                raise ValueError('白名單授權已失效，禁止完成通行')
+            first = st.first_sensor
+            if first not in ('A', 'B'):
+                raise ValueError('缺少有效方向感測器，請重新開始')
+            second = 'B' if first == 'A' else 'A'
+            if st.phase == 'WAIT_SECOND':
+                if not st.sensors.get(first):
+                    raise ValueError('請先保持第一個方向感測器為已觸發')
+                self.apply_sensor(db, st, second, True)
+                if st.phase != 'CROSSING':
+                    raise ValueError('未建立合法通行序列，禁止完成')
+            plate, direction = st.permit_plate, st.passage_direction
+            # Complete both sensor-clear events, just like a real vehicle
+            # clearing the shared lane. finish_crossing writes the Visit.
+            if st.sensors.get(first):
+                self.apply_sensor(db, st, first, False)
+            if st.sensors.get(second):
+                self.apply_sensor(db, st, second, False)
+            if st.phase == 'CROSSING':
+                self.finish_crossing(db, st)
+            if st.phase != 'IDLE':
+                raise ValueError('通行尚未完成，請檢查感測器狀態')
+            return {'plate': plate, 'direction': direction, 'recorded': True}
+
     def authorize(self,raw):
         plate=normal_plate(raw)
         with self.lock,self.Session.begin() as db:
@@ -280,11 +331,12 @@ class ParkingController:
                 if not db.scalar(select(Visit.id).where(Visit.plate==plate,Visit.left_at.is_(None))):
                     raise ValueError('查無此車牌的在場紀錄')
             st.permit_plate=plate
-            st.permit_expires=utcnow()+timedelta(seconds=PERMIT_SECONDS)
+            valid_seconds = SIM_PERMIT_SECONDS if st.mode=='SIM' else PERMIT_SECONDS
+            st.permit_expires=utcnow()+timedelta(seconds=valid_seconds)
             st.last_plate=plate
             st.alert=None
             self.event(db,'AUTHORIZE',f'{plate} {("進場" if direction=="ENTRY" else "離場")}驗證成功')
-            return {'plate':plate,'direction':direction,'valid_seconds':PERMIT_SECONDS}
+            return {'plate':plate,'direction':direction,'valid_seconds':valid_seconds}
 
     def gate_action(self,action,client_plate=None):
         if action not in ('OPEN','CLOSE'):

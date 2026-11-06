@@ -185,6 +185,11 @@ def create_app(test_config=None):
         controller.reset_all_sim()
         return jsonify(ok=True)
 
+    @app.post('/api/sim/complete-passage')
+    @protect
+    def sim_complete_passage():
+        return jsonify(ok=True, **controller.complete_sim_passage())
+
     @app.post('/api/passage/authorize')
     @protect
     def authorize():
