@@ -1,58 +1,207 @@
-# 莊停車場 Smart Parking
+# 莊停車場｜智慧停車場網站使用說明
 
-**四車位 × 單一雙向出入口 × 7 感測點 × Flask × ESP32 MicroPython × Render**
+**4 個車位 × 1 個雙向共用出入口 × 7 個感測點 × Flask × ESP32 MicroPython**
 
-這份專案提供可執行的網站及後端：模擬車位、A/B 方向事件、閘門開關、防夾、安全白名單、車輛進出紀錄、公開剩餘車位看板，以及供未來 ESP32 使用的 HTTP JSON API。前端採響應式暗色管理儀表板；網站與 API 由 **同一個 Flask 程序**提供，不需要再另外部署 GitHub Pages。
+這份 README 主要說明**如何實際操作莊停車場網站**。目前不用接線、不用攝影機，就能在瀏覽器測試模擬車輛進場、離場、車牌白名單、停車紀錄及防夾功能。
 
-> **完成程度**：Flask 網站、資料庫模型、API、前端模擬、核心單元測試已實作。`firmware/` 為待接線的 ESP32 **參考程式**，GPIO 尚未指定；USB 攝影機的實際 OCR 尚未實作，`camera_agent/send_plate.py` 只提供辨識結果的上傳接點。**本專案是課堂比例模型，不能未經額外安全認證用於真實車輛閘門。**
+- **[開啟管理網站](https://zhuang-smart-parking.onrender.com/login)**：需要管理員密碼。
+- **[開啟公開車位看板](https://zhuang-smart-parking.onrender.com/display)**：不需登入，只顯示剩餘車位。
+- **[GitHub 原始碼](https://github.com/Chuang-Chih-Hao/zhuang-smart-parking)**：網站、Flask、MicroPython 參考程式。
 
-## 1. 專案架構
+> **現階段請使用 SIM（模擬）模式。** ESP32 接線、MG90S 實體控制與 USB 攝影機 OCR 尚未完成；畫面上的車牌由使用者手動輸入，不是攝影機自動辨識。
 
-```text
-zhuang-smart-parking/
-├─ app.py                    Flask 路由、管理員登入、CSRF、設備 API
-├─ parking/
-│  ├─ core.py                方向狀態機、進出場、車位容量、安全限制
-│  └─ models.py              SQLAlchemy 資料表（SQLite/PostgreSQL）
-├─ templates/                管理控制台、登入頁、公開看板
-├─ static/                   網頁 CSS / JavaScript
-├─ firmware/                 MicroPython 感測器 / 伺服 / HTTP 範例
-├─ camera_agent/             電腦端「已辨識車牌」上傳範例
-├─ tests/                    核心、Flask API 測試
-├─ .github/workflows/ci.yml  推送時自動執行測試
-├─ render.yaml               Render Web Service Blueprint
-├─ .env.example              本機環境變數範例（不含真實密碼）
-└─ requirements.txt
-```
+## 目錄
 
-資料流：
+1. [第一次使用](#1-第一次使用)
+2. [每個頁面能做什麼](#2-每個頁面能做什麼)
+3. [車位與感測器的用途](#3-車位與感測器的用途)
+4. [模擬一輛車進場](#4-模擬一輛車進場)
+5. [模擬同一輛車離場](#5-模擬同一輛車離場)
+6. [手動觸發感測器及安全測試](#6-手動觸發感測器及安全測試)
+7. [管理五組預設車牌白名單](#7-管理五組預設車牌白名單)
+8. [查看紀錄、清空資料與重設](#8-查看紀錄清空資料與重設)
+9. [常見問題](#9-常見問題)
+10. [在 Windows + VS Code 本機執行](#10-在-windows--vs-code-本機執行)
+11. [GitHub / Render 與資料保存](#11-github--render-與資料保存)
+12. [未來的 MicroPython 硬體整合](#12-未來的-micropython-硬體整合)
 
-```text
-P1 P2 P3 P4 + A + B + S (7 sensors)
-                │
-      ESP32 / MicroPython
-                │ POST /api/device/events and /state
-             Flask API  ←  Camera agent (already recognized plate)
-                │
-       SQLAlchemy / Database
-                │
-     Admin dashboard / Public display
-```
+---
 
-- **P1–P4**：每個車位的占用訊號。
-- **A**：外側方向感測；**B**：內側方向感測。
-- **S**：閘門防夾，與方向判斷獨立，不能省略或兼用。
-- **A → B**：候選進場；**B → A**：候選離場。
-- 要在「車牌已驗證、閘門已開啟、方向順序正確、A/B/S 清空」後，系統才建立完整進出紀錄。
-- 車位容量以 `4 - max(實體占用, 已完成進場且未離場) - 待入場預留數` 估算，再限制於 0–4。車位與在場紀錄不同時顯示警告。
+## 1. 第一次使用
 
-### 單一共用出入口的限制
+1. 開啟 [管理網站](https://zhuang-smart-parking.onrender.com/login)。
+2. 輸入管理員密碼。密碼是部署者在 Render **Environment** 設定的 `ADMIN_PASSWORD`，**不是 GitHub 密碼**；本專案沒有公開預設管理員密碼。
+3. 登入後確認右上角顯示 **「模擬模式」**。如果不是，先到「系統設定」選擇 **SIM**。切換前須確認閘門已關閉，A、B、S 通道安全。
+4. 第一次示範若希望全新狀態，可到「感測器模擬」點 **「清空所有模擬資料」**。這會刪除之前的模擬紀錄與自訂白名單，使用前請先確認。
+5. 網站如果還顯示舊畫面，可按 **Ctrl + F5** 強制重新整理。
 
-本系統預設模型車一次只通過一輛，並且每次只處理一筆通行。兩車緊跟（tailgating）、並行、倒車、對射遮蔽、感測器盲區及車牌辨識角度都需要額外測試；**只有 A/B 兩個點，不能保證所有複雜交通行為都能可靠判定**。MG90S 沒有實際位置回饋，因此網站的 `OPEN/CLOSED` 是馬達命令推定值，不是限位開關的實測結果。實際雙向攝影可能需要兩個拍攝方向或雙攝影機。
+**最重要的規則：只驗證車牌、只開閘，不會自動新增進場紀錄。** 要真正完成模擬通行，還需要按「③ 完成模擬通行並記錄」，或完成 A/B 感測器序列。
 
-## 2. 在 Windows + VS Code 執行
+## 2. 每個頁面能做什麼
 
-先安裝 Python 3.11 或 3.12、VS Code。開啟本專案資料夾，在 VS Code 的 Terminal / PowerShell 輸入：
+| 左側選單 | 功能 | 主要操作 |
+| --- | --- | --- |
+| **即時總覽** | 監控 4 個車位 | 看總車位、剩餘車位、在場車輛；SIM 下點 P1～P4 可切換占用 |
+| **通道監控** | 驗證及控制共用閘門 | 輸入車牌 → 驗證 → 開閘 → 完成模擬通行並記錄 → 關閘 |
+| **感測器模擬** | 模擬 7 個感測點 | 觸發 A、B、S 或 P1～P4；重設感測器；清空所有模擬資料 |
+| **車牌白名單** | 設定可通行車牌 | 查看五組預設車牌、新增或停用車牌 |
+| **進出紀錄** | 查看通行歷史 | 看進場時間、離場時間、停留時間和在場狀態 |
+| **系統設定** | 來源與設定 | SIM 模擬／HARDWARE 實體模式切換，查看系統配置 |
+
+左下角的「開啟對外車位看板」會打開公開頁面，只提供車位資訊，不顯示完整管理功能。
+
+## 3. 車位與感測器的用途
+
+| 感測點 | 用途 |
+| --- | --- |
+| **P1、P2、P3、P4** | 四個車位是否有車 |
+| **A** | 共用出入口**外側**感測點：通常先觸發代表準備進場 |
+| **B** | 共用出入口**內側**感測點：通常先觸發代表準備離場 |
+| **S** | 閘門安全區的**防夾**感測點；受阻時不能安全關閘 |
+
+- **進場順序：A → B**。
+- **離場順序：B → A**。
+- **S 只負責防夾，不用來判斷進出方向**。
+- 在「感測器模擬」頁面，點一下感測器會變成 **「已觸發」**；再點一下回到 **「未觸發」**。感測器不會因離開頁面自動關閉。
+- 四個車位感測器與進出紀錄**分開計算**。有進場紀錄，不代表 P1 自動顯示有車；模擬停入車位時需自行點選 P1～P4。
+
+## 4. 模擬一輛車進場
+
+以下使用預設白名單車牌 **`ABC-1234`**。先確認為 SIM 模式，A、B、S 都未觸發，閘門關閉。
+
+### 建議方法：一鍵完成通行
+
+1. 點左側 **「感測器模擬」**，將 **A 外側**切換為 **「已觸發」**。
+2. 點 **「通道監控」**，在車牌欄輸入 **`ABC-1234`**。
+3. 點 **「① 驗證車牌」**；收到成功訊息後，按 **「② 開啟閘門」**。
+4. 按 **「③ 完成模擬通行並記錄」**。程式會模擬車輛從 A 通過 B，讓 A、B 回到未觸發，並新增一筆**進場紀錄**；S 必須保持安全。
+5. 按 **「④ 安全關閘」**。
+6. 點 **「進出紀錄」**，確認 `ABC-1234` 已有進場時間，並顯示 **「在場中」**。
+7. 如要模擬真正停入停車格，再到 **「即時總覽」** 點一下 **P1**，使 P1 顯示「已占用」。
+
+### 預期畫面
+
+- 「在場車輛」從 0 → **1**。
+- 在沒有其他車輛的情況下，「剩餘車位」從 4 → **3**。
+- 「進出紀錄」新增 `ABC-1234`，**尚未有離場時間**。
+- 若點 P1 模擬停車，「實體占用」會變成 1。
+
+> 如果只做到步驟 3（驗證成功＋開閘），**尚未建立進場紀錄**；此時直接改觸發 B 要離場，系統會提示「查無此車牌的在場紀錄」。
+
+## 5. 模擬同一輛車離場
+
+**離場前先到「進出紀錄」確認 `ABC-1234` 已有一筆「在場中」的進場資料。**
+
+1. 如果剛才把 P1 設為「已占用」，請先在「即時總覽」點 P1，恢復 **「空車位」**，表示車輛離開停車格。
+2. 到「感測器模擬」，將 **B 內側**切成 **「已觸發」**。**不要從 A 開始**，A 代表進場方向。
+3. 到「通道監控」輸入 **同一組車牌 `ABC-1234`**。
+4. 點 **「① 驗證車牌」→「② 開啟閘門」→「③ 完成模擬通行並記錄」**。
+5. 按 **「④ 安全關閘」**。
+6. 到「進出紀錄」重新整理。原本 `ABC-1234` 的那筆紀錄，現在應出現**離場時間、停留時間、已離場**。
+
+正常情況下，「在場車輛」從 1 → **0**。如果 P1～P4 都清空，剩餘車位會回到 4。
+
+**不要以第二次 A 觸發來模擬離場**；同一車牌已在場時，再由 A 進場會被系統判定為重複進場。
+
+## 6. 手動觸發感測器及安全測試
+
+除了按「③ 完成模擬通行並記錄」，也可以完全手動測試 A/B 的順序。
+
+### 手動進場
+
+1. A 已觸發 → 驗證白名單車牌 → 開閘。
+2. B 已觸發。
+3. A 未觸發 → B 未觸發（S 也未觸發）。
+4. 這時才算完成 A→B，應產生進場紀錄；最後安全關閘。
+
+### 手動離場
+
+1. B 已觸發 → 驗證**已有在場紀錄**的車牌 → 開閘。
+2. A 已觸發。
+3. B 未觸發 → A 未觸發（S 也未觸發）。
+4. 系統完成 B→A 並補上離場時間；最後安全關閘。
+
+### 測試未授權車牌
+
+- 先觸發 A，輸入**不在白名單**的車牌，例如 `XYZ-9999`。
+- 按驗證車牌，應得到拒絕訊息；**未通過白名單就不能開閘，更不能建立正常進出紀錄**。
+- 即使直接點 B 模擬通過，也不能被當成正常授權進場。
+
+### 測試 S 防夾
+
+- 通過白名單驗證、開閘後，把 S 切成「已觸發」。
+- 嘗試按「安全關閘」，應被拒絕；「完成模擬通行並記錄」也不能在 S 受阻時執行。
+- 清空 S，按正常流程完成通行，再關閘。
+
+**模擬操作期限：** SIM 模式的通行流程與驗證期限約為 **10 分鐘**；逾時請檢查流程狀態，必要時重設模擬感測器後重新進行。這個期限**不適用於實體 ESP32 安全控制**。
+
+## 7. 管理五組預設車牌白名單
+
+進入左側 **「車牌白名單」**。以下五組是預設啟用的**模擬測試車牌**：
+
+| 車牌 | 狀態 |
+| --- | --- |
+| `ABC-1234` | 已啟用 |
+| `ABC-5333` | 已啟用 |
+| `DEF-5678` | 已啟用 |
+| `GHI-9012` | 已啟用 |
+| `JKL-3456` | 已啟用 |
+
+**新增車牌：** 輸入格式正確的車牌（例如 `ZZZ-5555`），可填備註，按 **「＋ 新增車牌」**。  
+**停用車牌：** 在車牌列表右側按 **「停用」**，停用後不可再通過白名單驗證。  
+**重新啟用：** 再次輸入同一車牌並新增即可。
+
+系統進場**與離場**都需要有效白名單；離場還會確認該車牌是否有「在場中」的紀錄。預設示範車牌在 HARDWARE 實體模式中**不會直接作為正式通行授權**。
+
+## 8. 查看紀錄、清空資料與重設
+
+### 「進出紀錄」頁面
+
+可以看 **車牌、進場時間、離場時間、停留時間、在場中／已離場狀態**，並使用「重新整理」更新。只有**完成通道通行**才會新增或更新這裡的紀錄，單純感測 A/B 或點 P1 不會新增紀錄。
+
+### 「即時總覽」四個數字
+
+| 項目 | 說明 |
+| --- | --- |
+| 總車位 | 固定 4 |
+| 剩餘車位 | 綜合車位感測器、在場車輛與待入場預留數估算 |
+| 實體占用 | P1～P4 目前被設成「已占用」的格數 |
+| 在場車輛 | 已完成進場、尚未完成離場的紀錄數 |
+
+如果已進場但還沒有點 P1，**在場車輛**與**實體占用**可能不同，網站會顯示提醒。這不一定是紀錄遺失。
+
+### 兩個重設按鈕的差別
+
+在「感測器模擬」頁面：
+
+| 功能 | 會清除 | 會保留 |
+| --- | --- | --- |
+| **重設感測器** | 7 個感測器、模擬閘門狀態、未完成的通行流程 | **白名單、歷史進出紀錄、既有事件** |
+| **清空所有模擬資料** | 感測器、閘門、通行流程、進出紀錄、事件、自訂白名單與待處理命令；恢復**五組預設車牌** | 不會控制實體硬體 |
+
+**「清空所有模擬資料」無法復原**，操作前會要求確認，且只有 SIM 模式可以使用。只想開始下一次測試時，通常不需要清空全部資料。
+
+## 9. 常見問題
+
+| 遇到的狀況 | 原因與處理方式 |
+| --- | --- |
+| A 已觸發，但「開啟閘門」不能按 | 尚未輸入有效的白名單車牌，或尚未按「① 驗證車牌」；輸入車牌若與原授權不同，也要重新驗證 |
+| 開閘了卻沒有進場紀錄 | **還沒有完成通行**；請按「③ 完成模擬通行並記錄」，或完成 A→B、清空 A/B/S |
+| B 已觸發但無法離場 | **沒有「在場中」的進場紀錄**，或車牌不同；先回進出紀錄確認，必要時重新從 A 完成進場 |
+| 已離場卻還顯示有車位被占用 | P1～P4 感測器須另外切回「空車位」；紀錄不會代替實際車位感測 |
+| 無法關閘 | A、B 或 S 仍有物體，或通行尚未完成；請清空安全區後再關閘 |
+| 車牌顯示不在白名單 | 到「車牌白名單」新增／啟用車牌，再重新驗證 |
+| 網站沒有新按鈕 | 先確認 Render 最新版本為 **Live**，再按 **Ctrl + F5** |
+| 重啟或部署後歷史紀錄消失 | Render 免費 Web Service 的 SQLite 資料可能無法持久保存；正式使用請改連持久化 PostgreSQL |
+| 按鈕呈現停用 | 確認目前為 **SIM 模式**，並且已按順序通過車牌驗證、開閘 |
+
+## 10. 在 Windows + VS Code 本機執行
+
+如果直接使用 Render 線上網站，**可以跳過這一節**。想在自己的電腦開發或測試時：
+
+1. 安裝 **Python 3.11 / 3.12** 和 **VS Code**。
+2. 從 [GitHub 專案](https://github.com/Chuang-Chih-Hao/zhuang-smart-parking) 下載 ZIP，解壓後用 VS Code 開啟專案資料夾。
+3. 開啟 VS Code Terminal（PowerShell），依序執行：
 
 ```powershell
 py -3.12 -m venv .venv
@@ -61,178 +210,56 @@ python -m pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
-若 `py -3.12` 無法找到，可改成電腦實際安裝的 `py -3.11` 或 `python -m venv .venv`。
-
-用 VS Code 打開 `.env`，至少更改 `SECRET_KEY`、`ADMIN_PASSWORD`、`DEVICE_TOKEN` 和 `CAMERA_TOKEN`。**不要把 `.env` 上傳 GitHub**。在本機保留 `APP_ENV=development`、`SEED_DEMO=true`，可以使用範例車牌 `ABC-1234`、`DEF-5678`。
-
-接著啟動：
+4. 編輯本機 `.env`。自訂 `ADMIN_PASSWORD`、`SECRET_KEY`、`DEVICE_TOKEN`、`CAMERA_TOKEN`，保留 `APP_ENV=development`。**絕對不要把真實密碼、Token、`.env` 推上 GitHub**。
+5. 啟動網站：
 
 ```powershell
 python app.py
 ```
 
-打開：
+6. 打開 <http://127.0.0.1:5000/login> 登入。公開看板在 <http://127.0.0.1:5000/display>。
 
-- 管理員登入：`http://127.0.0.1:5000/login`
-- 公開車位看板：`http://127.0.0.1:5000/display`
-- 健康檢查：`http://127.0.0.1:5000/healthz`
+若 Windows 不允許啟用虛擬環境，可以改用 `.\.venv\Scripts\python.exe` 執行 pip 和 `app.py`。
 
-本機資料庫預設是 `instance/parking.db`。首次啟動會自動建立資料表，重新啟動仍會保留資料。若早期測試版資料庫結構不同，**請先備份**再執行資料庫遷移或刪除舊測試 DB；`create_all` 不會自動變更舊表欄位。
-
-PowerShell 若出現啟用政策錯誤，可直接使用：
-
-```powershell
-.\.venv\Scripts\python.exe app.py
-```
-
-## 3. 五分鐘模擬操作
-
-1. 以 `.env` 中的 `ADMIN_PASSWORD` 登入。
-2. 模擬模式會自動提供五組預設白名單：`ABC-1234`、`ABC-5333`、`DEF-5678`、`GHI-9012`、`JKL-3456`。新增自訂車牌也可以，但所有進出都必須先通過白名單驗證。
-3. 在「感測器模擬」把 **A 外側**切成「已觸發」。
-4. 在「通道監控」輸入 `ABC-1234` → **驗證車牌** → **開啟閘門**。
-5. 在「通道監控」按 **完成模擬通行並記錄**，系統會依照 A→B 的順序模擬通過，清空 A/B 並建立一筆進場紀錄。亦可手動先觸發 B，再依序清空 A、B。
-6. 進場紀錄增加一筆，在場車輛 +1，剩餘車位 -1（預留數也會計算）。可以再把 P1 設成「有車」，模擬停入車位。
-7. 返回「通道監控」按 **安全關閘**（必須 A、B、S 全部未觸發）。
-8. **離場**時先觸發 B，對同一車牌驗證／開閘，按 **完成模擬通行並記錄**；或自行觸發 A 再清空 B、A。兩種方式都會把離場時間寫回同一筆進出紀錄。
-
-**模擬操作期限**：手動切換感測器需要時間，模擬通道等待與授權期限改為 10 分鐘；ESP32 實體模式仍保持原本較短的時限。只按驗證或開閘不會建立紀錄，必須完成 A→B/B→A 的通行與清空，或按上述完成模擬通行按鈕。請先確認「進出紀錄」有進場資料，才從 B 操作離場。如果 Render 使用免費服務的 SQLite，重新部署或重啟仍可能使資料消失，正式記錄請改用持久化 PostgreSQL。\n\n**清空所有模擬資料**：進入「感測器模擬」使用此按鈕，會二次確認並清除 7 個感測器、閘門狀態、進出紀錄、系統事件、待處理命令以及自訂白名單，最後恢復五組預設示範車牌；**只能在 SIM 模式執行，不能復原，不會對實體硬體發送命令**。「重設感測器」仍保留原本的非破壞性操作，只重設感測器和閘門。
-
-**未授權行為**：只觸發 A 或 B 不會開閘；沒有白名單驗證、車牌遭停用、輸入車牌與已驗證車牌不一致，均禁止開閘。預設示範車牌只允許 SIM 模式，切換 HARDWARE 後需自行明確建立或更新正式白名單。
-
-**防夾測試**：開閘後把 S 切成「已觸發」，此時網頁關閘按鈕應收到拒絕回覆。**未授權通過**：在沒有驗證車牌／開閘的情況下，依序觸發 A、B，系統應顯示異常且不新增進出紀錄。
-
-> 目前不會自動收取費用。停留時間會由 `entered_at` 和 `left_at` 計算；後續可另設收費規則。
-
-## 4. 上傳新的 GitHub 儲存庫
-
-**建議庫名：** `zhuang-smart-parking`，帳號可選 `Chuang-Chih-Hao`。
-
-1. 至 <https://github.com/new> 建立 repository；**不勾選** Initialize this repository with a README（本專案已包含）。
-2. 在本機解壓縮這份專案後，用 VS Code 開啟資料夾終端機，執行：
-
-```powershell
-git init
-git add .
-git commit -m "Initial smart parking Flask simulator and ESP32 API"
-git branch -M main
-git remote add origin https://github.com/Chuang-Chih-Hao/zhuang-smart-parking.git
-git push -u origin main
-```
-
-若儲存庫名稱或帳號不同，請修改 `git remote add origin` 的網址。確認已建立 `.gitignore` 並且 **沒有將 `.env`、`instance/parking.db`、ESP32 Wi-Fi 密碼、API Token** 推上 GitHub。推送後 `.github/workflows/ci.yml` 會自動執行測試。
-
-## 5. 部署 Render（方案 A）
-
-1. 在 Render 登入，選擇 **New → Blueprint**，連接剛建立的 GitHub repository（含根目錄 `render.yaml`）。也可以使用 **New → Web Service** 連接同一 repo。
-2. 選免費 Web Service 方案、Singapore 區域（YAML 已設定）。
-3. `ADMIN_PASSWORD` 設定**至少 12 字元**的強密碼。`SECRET_KEY`、`DEVICE_TOKEN`、`CAMERA_TOKEN` 由 Blueprint 自動產生；**不要把它們寫回 GitHub**。
-4. Blueprint 檢查部署計畫後，確認不會產生意外收費項目，再按部署。
-5. 等待服務完成，打開 Render 提供的 `https://<service>.onrender.com/login`，用 `ADMIN_PASSWORD` 登入。`/display` 是不需要登入的公開看板。
-6. 後續只要推送 GitHub `main`，Render 就會重新部署。請查看 Render Build Logs 和 Runtime Logs 確認成功。
-
-若手動建立 Web Service，請設定：
-
-| 設定 | 值 |
-|---|---|
-| Build Command | `pip install -r requirements.txt` |
-| Start Command | `gunicorn --workers 1 --threads 4 --timeout 60 --bind 0.0.0.0:$PORT app:app` |
-| Health Check | `/healthz` |
-| APP_ENV | `production` |
-| SECRET_KEY | 長隨機字串 |
-| ADMIN_PASSWORD | 至少 12 字元強密碼 |
-| DEVICE_TOKEN | 隨機秘密值 |
-| CAMERA_TOKEN | 隨機秘密值 |
-
-### 重要：正式記錄需要持久化 PostgreSQL
-
-**Render 免費 Web Service 的本機硬碟是暫存的。** 預設 SQLite 只適合示範，服務重啟、休眠或重新部署後，停車紀錄可能消失。要持續保留白名單與進出資料，請在 Render 建立或連接一個受管理的 PostgreSQL，取得連線字串並在 Web Service 環境變數加入 `DATABASE_URL`（支援 `postgresql://...` / `postgres://...`），再重新部署。
-
-Blueprint **不會自行建立付費資料庫**，避免額外收費；資料庫需要另外選定。Render 免費 PostgreSQL 有有效期限制，不能當永久資料庫。請依照 Render 當下顯示的方案費用與限制決定；勿將 PostgreSQL URL 提交 GitHub。
-
-官方參考：<https://render.com/docs/deploy-flask>、<https://render.com/docs/blueprint-spec>、<https://render.com/docs/free>。
-
-## 6. API 摘要
-
-| HTTP | Path | 認證 | 功能 |
-|---|---|---|---|
-| GET | `/api/public/status` | 無 | 對外車位看板（不含車牌） |
-| GET | `/api/status` | 管理員 session | 完整狀態及事件 |
-| GET / POST | `/api/plates` | 管理員 session + 寫入 CSRF | 查詢／新增車牌 |
-| DELETE | `/api/plates/<plate>` | 管理員 + CSRF | 停用車牌 |
-| GET | `/api/records` | 管理員 session | 最近 150 筆進出紀錄 |
-| POST | `/api/sim/sensors` | 管理員 + CSRF | 模擬感測器變化 |
-| POST | `/api/sim/reset` | 管理員 + CSRF | 重設模擬訊號，不刪除歷史 |
-| POST | `/api/sim/reset-all` | 管理員 + CSRF + `confirmation: RESET_SIM_ALL` | 清除全部模擬資料並恢復五組預設車牌 |
-| POST | `/api/sim/complete-passage` | 管理員 + CSRF | 模擬完成已授權、已開閘的通行並儲存進出紀錄（SIM only） |
-| POST | `/api/passage/authorize` | 管理員 + CSRF | 驗證車牌及預留通行 |
-| POST | `/api/gate/open` / `close` | 管理員 + CSRF | 安全閘門命令 |
-| POST | `/api/mode` | 管理員 + CSRF | 切換 SIM/HARDWARE |
-| POST | `/api/device/events` | Bearer DEVICE_TOKEN | 邊緣變化事件，保留 A/B 順序 |
-| POST | `/api/device/state` | Bearer DEVICE_TOKEN | 週期感測器快照與心跳 |
-| GET | `/api/device/commands` | Bearer DEVICE_TOKEN | 裝置取得尚未 ACK 的控制命令 |
-| POST | `/api/device/ack` | Bearer DEVICE_TOKEN | 回覆控制命令成功／失敗 |
-| POST | `/api/camera/recognize` | Bearer CAMERA_TOKEN | 上傳已辨識車牌並嘗試授權 |
-| GET | `/healthz` | 無 | Render 健康檢查 |
-
-### 設備事件例子
-
-**POST** `/api/device/events`，Header: `Authorization: Bearer <DEVICE_TOKEN>`；下列為 JSON Body：
-
-```json
-{"boot_id":"espboot20261106","sequence":17,"sensor":"A","detected":true}
-```
-
-ESP32 必須先完成事件上報，才能發送序號更大的週期快照。單張狀態快照本身無法判斷 A/B 先後順序。每次重新啟動都使用新的 `boot_id`，使伺服器能重置舊序列號及取消舊命令。
-
-## 7. ESP32 MicroPython：現在不接線，未來使用方式
-
-目前 `firmware/config_example.py` 中所有 GPIO 預設是 `None`，`firmware/main.py` 在腳位尚未指定時**直接拒絕啟動**。這是刻意設計：在確認感測器供電、輸出電壓、ESP32 GPIO 邊界、伺服馬達獨立電源及共地前，絕不能擅自讓 MG90S 運動。
-
-未來確認硬體後：
-
-1. `config_example.py` 複製成 `config.py`，依實際接線填入 7 個感測器 GPIO 與伺服馬達 GPIO。
-2. `secrets_example.py` 複製成 `secrets.py`，填入 Wi-Fi、Render HTTPS 服務網址、Render `DEVICE_TOKEN`。
-3. 確保 ESP32 MicroPython 已提供 `network`、`urequests`、PWM 等必要模組，確認 HTTPS/TLS 與憑證驗證能力。不同版本 MicroPython 的 TLS 驗證能力不同；**不得在未驗證 TLS 安全性的情況下，將正式控制 Token 經網路傳輸**。若能力不足，應使用受信任的本地閘道代為與 Render 溝通。
-4. 先在脫離閘門連桿的情況測試 MG90S 轉角，再測 S 阻擋時絕不關閉。
-5. 將程式上傳 ESP32，確認事件、心跳、命令 ACK，再於網頁切換 HARDWARE。
-
-**硬體安全特別注意**：MG90S 無實際位置回授，`gate.state` 只是控制器推定；單一紅外線 S 也不具備真實停車場安全設備的冗餘保護。若網路斷線，**本地保護邏輯不能依賴 Flask**。本範例不能作為可直接投入實際車輛環境的認證控制器。
-
-## 8. USB 攝影機與車牌辨識
-
-Render 在雲端無法直接讀取你的 Windows USB 攝影機，因此 OCR 應在本機執行，再把辨識結果透過 HTTPS 傳給 Flask。`camera_agent/send_plate.py` 提供了結果上傳範例，**不包含實際影像辨識演算法**。首先要在通道 A 或 B 觸發後，再送對應車牌；伺服器會使用白名單或在場紀錄檢查方向授權。
-
-PowerShell 示範（先設定與 Flask 一致的環境變數）：
-
-```powershell
-$env:PARKING_API_URL = "http://127.0.0.1:5000"
-$env:CAMERA_TOKEN = "從你的 .env 讀取，不要發布"
-python camera_agent/send_plate.py ABC-1234
-```
-
-正式部署時將 URL 改成 Render 的 HTTPS 網址。若攝影機只能看到同一側車牌，需要調整拍攝角度或新增第二個拍攝方向。
-
-## 9. 測試
+**執行程式測試：**
 
 ```powershell
 python -m pip install pytest
 python -m pytest -q
 ```
 
-- `tests/test_core.py`：進場、離場、在場紀錄、容量、白名單、安全阻擋、反向、設備訊息序號等。
-- `tests/test_flask_api.py`：登入、CSRF、裝置 Token、API 通行流程。
-- 推送 GitHub 時會由 GitHub Actions 執行相同測試。
+## 11. GitHub / Render 與資料保存
 
-## 10. 後續待整合
+- **GitHub** 存放程式碼；現有儲存庫是 [`Chuang-Chih-Hao/zhuang-smart-parking`](https://github.com/Chuang-Chih-Hao/zhuang-smart-parking)，**不必再建立新儲存庫**。
+- **Render** 執行 Flask 網站與 API，網址是 <https://zhuang-smart-parking.onrender.com>。推送 GitHub `main` 後，Render 目前設為自動部署。
+- **管理員密碼** 在 Render **Environment → `ADMIN_PASSWORD`** 設定（至少 12 字元）；`SECRET_KEY`、`DEVICE_TOKEN`、`CAMERA_TOKEN` 由 Blueprint 配置生成，不能公開或寫入 README。
+- **SQLite** 適合本機與短暫示範；若 Render 未接持久化資料庫，進出紀錄／自訂白名單在重啟、重新部署後**可能遺失**。要長期保留資料，應配置持久化 PostgreSQL 的 `DATABASE_URL` 與備份。
+- **部署設定** 在 [`render.yaml`](render.yaml)；**自動測試**在 [GitHub Actions](https://github.com/Chuang-Chih-Hao/zhuang-smart-parking/actions)；出現線上錯誤時可在 Render **Deploys / Logs** 查看。
 
-- [ ] 確認新購內側方向感測器 B；依模型尺寸選擇 FC-51 或對射式。
-- [ ] 確定 7 個感測點 GPIO、5V 伺服供電、防夾安全配置。
-- [ ] 測試實際方向、倒車、緊跟、反光與遮蔽情況。
-- [ ] 在本地 USB 攝影機上完成真實 OCR，辨識進出兩個方向的車牌。
-- [ ] Render 接上可持久化的 PostgreSQL。
-- [ ] 依測試結果補強事件重送、斷線重啟、閘門位置確認和安全硬體。
+## 12. 未來的 MicroPython 硬體整合
+
+目前 **`firmware/` 只是 ESP32 MicroPython 參考程式**，GPIO 預設尚未配置，不能在未確認接線、供電與安全條件下直接控制伺服馬達。
+
+預定整合方式：
+
+```text
+P1～P4 車位感測 + A 外側 + B 內側 + S 防夾
+                  ↓
+            ESP32 / MicroPython
+                  ↓ Wi-Fi / JSON
+            Python Flask / 資料庫
+                  ↓
+            停車場管理網站
+
+USB 攝影機（電腦本機） → OCR（待開發） → Flask
+```
+
+- **MicroPython**：讀取實際感測器與控制 MG90S，防夾安全判斷必須由 ESP32 本機執行。
+- **攝影機**：目前 `camera_agent/send_plate.py` 僅能上傳「已辨識的車牌結果」，尚未有真正影像 OCR 功能。
+- **安全限制**：單一反射式紅外線感測器、MG90S 無位置回授與雲端 API 不能取代真實車輛閘門的安全保護；本系統是**課堂模型／展示專案**，未經額外安全設計不得直接用於實際道路車輛。
 
 ---
 
-**授權與資料安全**：請勿公開真實使用者車牌與進出資料。白名單、進出紀錄只允許管理員存取；公開看板只回傳容量資訊。部署時請為 GitHub/Render 管理權限、密碼、Token 和資料保留週期制定管理方式。
+### 第一次操作的最短路線
+
+**清空所有模擬資料（如無需保留歷史） → A 觸發 → 驗證 `ABC-1234` → 開閘 → 完成模擬通行並記錄 → 關閘 → 查看進場紀錄 → P1 設占用 → P1 清空 → B 觸發 → 驗證同車牌 → 開閘 → 完成模擬通行並記錄 → 關閘 → 查看離場紀錄。**
