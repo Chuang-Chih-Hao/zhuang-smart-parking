@@ -38,7 +38,7 @@ def test_browser_sim_flow(client):
         return response.json
     post('/api/sim/sensors',{'sensor':'A','detected':True})
     post('/api/passage/authorize',{'plate':'ABC-1234'})
-    post('/api/gate/open',{})
+    post('/api/gate/open',{'plate':'ABC-1234'})
     post('/api/sim/sensors',{'sensor':'B','detected':True})
     post('/api/sim/sensors',{'sensor':'A','detected':False})
     post('/api/sim/sensors',{'sensor':'B','detected':False})
@@ -53,3 +53,27 @@ def test_device_token(client):
             'sensors':{'P1':True},'gate':'CLOSED'},headers={'Authorization':'Bearer test-device-token'})
     assert result.status_code==200
     assert client.get('/api/status',headers=headers).json['occupied']==1
+
+
+def test_reset_all_requires_csrf_and_confirmation(client):
+    headers=authenticate(client)
+    assert client.post('/api/sim/reset-all',json={'confirmation':'RESET_SIM_ALL'}).status_code==403
+    assert client.post('/api/sim/reset-all',json={},headers=headers).status_code==400
+    client.post('/api/plates',json={'plate':'ZZZ-5555'},headers=headers)
+    result=client.post('/api/sim/reset-all',json={'confirmation':'RESET_SIM_ALL'},headers=headers)
+    assert result.status_code==200
+    assert len(client.get('/api/plates',headers=headers).json['items'])==5
+    assert client.get('/api/records',headers=headers).json['items']==[]
+
+
+def test_no_open_without_valid_whitelisted_plate(client):
+    headers=authenticate(client)
+    def post(path,data):
+        return client.post(path,json=data,headers=headers)
+    assert post('/api/sim/sensors',{'sensor':'A','detected':True}).status_code==200
+    assert post('/api/passage/authorize',{'plate':'XYZ-9999'}).status_code==400
+    assert post('/api/gate/open',{'plate':'XYZ-9999'}).status_code==400
+    assert client.get('/api/status',headers=headers).json['gate']=='CLOSED'
+    assert post('/api/passage/authorize',{'plate':'ABC-1234'}).status_code==200
+    assert post('/api/gate/open',{'plate':'XYZ-9999'}).status_code==400
+    assert client.get('/api/status',headers=headers).json['gate']=='CLOSED'

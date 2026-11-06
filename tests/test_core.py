@@ -1,7 +1,7 @@
 import tempfile
 from pathlib import Path
 import pytest
-from parking.core import ParkingController
+from parking.core import ParkingController, DEFAULT_DEMO_PLATES
 
 @pytest.fixture
 def ctl():
@@ -108,3 +108,55 @@ def test_full_lot_denies_new_entry(ctl):
     step(ctl,'A',True)
     with pytest.raises(ValueError,match='已滿'):
         ctl.authorize('ABC-1234')
+
+
+def test_five_default_demo_plates(ctl):
+    rows={r['plate']:r for r in ctl.plates()}
+    assert set(rows)==set(DEFAULT_DEMO_PLATES)
+    assert all(r['enabled'] for r in rows.values())
+
+
+def test_unlisted_exit_is_denied_even_when_parked(ctl):
+    entry(ctl)
+    ctl.remove_plate('ABC-1234')
+    step(ctl,'B',True)
+    with pytest.raises(ValueError,match='白名單'):
+        ctl.authorize('ABC-1234')
+    with pytest.raises(ValueError,match='授權'):
+        ctl.gate_action('OPEN')
+    assert ctl.status()['gate']=='CLOSED'
+    assert ctl.status()['active_visits']==1
+
+
+def test_revoked_plate_and_mismatched_input_never_open(ctl):
+    step(ctl,'A',True)
+    ctl.authorize('ABC-1234')
+    with pytest.raises(ValueError,match='不一致'):
+        ctl.gate_action('OPEN',client_plate='ABC-5333')
+    assert ctl.status()['gate']=='CLOSED'
+    ctl.remove_plate('ABC-1234')
+    with pytest.raises(ValueError,match='白名單'):
+        ctl.gate_action('OPEN',client_plate='ABC-1234')
+    assert ctl.status()['gate']=='CLOSED'
+
+
+def test_full_reset_restores_clean_demo_baseline(ctl):
+    entry(ctl)
+    ctl.add_plate('ZZZ-5555', '自訂測試')
+    step(ctl,'P1',True)
+    step(ctl,'B',True)
+    ctl.reset_all_sim()
+    state=ctl.status()
+    assert state['mode']=='SIM'
+    assert state['gate']=='CLOSED' and state['phase']=='IDLE'
+    assert all(not val for val in state['sensors'].values())
+    assert state['last_plate'] is None and state['alert'] is None
+    assert state['events']==[] and state['active_visits']==0
+    assert state['available']==4 and ctl.records()==[]
+    assert set(row['plate'] for row in ctl.plates())==set(DEFAULT_DEMO_PLATES)
+
+
+def test_full_reset_forbidden_in_hardware(ctl):
+    ctl.mode('HARDWARE')
+    with pytest.raises(ValueError,match='模擬模式'):
+        ctl.reset_all_sim()

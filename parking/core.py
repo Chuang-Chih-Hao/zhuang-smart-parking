@@ -2,7 +2,7 @@
 import re
 import threading
 from datetime import timedelta
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, delete, func, select
 from sqlalchemy.orm import Session, sessionmaker
 from .models import Base, SystemState, Plate, Visit, Event, DeviceCommand, utcnow
 
@@ -12,6 +12,8 @@ PASSAGE_TIMEOUT_SECONDS = 50
 PERMIT_SECONDS = 90
 DEVICE_OFFLINE_SECONDS = 12
 PLATE_RE = re.compile(r'^[A-Z0-9]{2,4}-?[A-Z0-9]{3,5}$')
+DEMO_NOTE = '預設示範車牌（僅供模擬模式使用）'
+DEFAULT_DEMO_PLATES = ('ABC-1234', 'ABC-5333', 'DEF-5678', 'GHI-9012', 'JKL-3456')
 
 
 def stamp(value):
@@ -38,10 +40,15 @@ class ParkingController:
         self.Session = sessionmaker(self.engine, expire_on_commit=False)
         Base.metadata.create_all(self.engine)
         with self.Session.begin() as db:
-            if not db.get(SystemState, 1):
-                db.add(SystemState(id=1, sensors={k: False for k in SENSOR_KEYS}))
-            if seed_demo and not db.scalar(select(Plate.id).limit(1)):
-                db.add_all([Plate(plate='ABC-1234', note='範例車輛'), Plate(plate='DEF-5678', note='範例車輛')])
+            st = db.get(SystemState, 1)
+            if not st:
+                st = SystemState(id=1, mode='SIM', gate='CLOSED', sensors={k: False for k in SENSOR_KEYS})
+                db.add(st)
+            # Supply five example plates in simulation, including existing databases.
+            # Never re-enable a plate that an administrator has explicitly disabled.
+            if st.mode == 'SIM':
+                existing = set(db.scalars(select(Plate.plate)).all())
+                db.add_all(Plate(plate=p, note=DEMO_NOTE) for p in DEFAULT_DEMO_PLATES if p not in existing)
 
     @staticmethod
     def event(db, kind, message):
@@ -168,6 +175,23 @@ class ParkingController:
             self.clear_passage(st)
             self.event(db,'SIM','已重設模擬感測器與閘門（進出紀錄保留）')
 
+    def reset_all_sim(self):
+        """Restore a clean demo baseline; never send commands to physical equipment."""
+        with self.lock, self.Session.begin() as db:
+            st = db.get(SystemState, 1)
+            if st.mode != 'SIM':
+                raise ValueError('只能在模擬模式清空所有測試資料')
+            st.sensors = {k: False for k in SENSOR_KEYS}
+            st.gate = 'CLOSED'
+            st.alert = None
+            st.last_plate = None
+            self.clear_passage(st)
+            # This is intentionally destructive and requires explicit UI confirmation.
+            # Test visits, system events, pending commands and custom plates are removed.
+            for model in (DeviceCommand, Event, Visit, Plate):
+                db.execute(delete(model))
+            db.add_all(Plate(plate=p, note=DEMO_NOTE) for p in DEFAULT_DEMO_PLATES)
+
     def apply_sensor(self, db, st, key, detected, track=True):
         if key not in SENSOR_KEYS or type(detected) is not bool:
             raise ValueError('感測器名稱或布林狀態不合法')
@@ -244,10 +268,10 @@ class ParkingController:
             if st.phase!='WAIT_SECOND' or not st.passage_direction:
                 raise ValueError('請先觸發 A（進場）或 B（離場）感測器')
             direction=st.passage_direction
+            allowed=db.scalar(select(Plate).where(Plate.plate==plate,Plate.enabled.is_(True)))
+            if not allowed or (st.mode=='HARDWARE' and allowed.note in (DEMO_NOTE, '範例車輛')):
+                raise ValueError('此車牌未通過白名單驗證，禁止進出')
             if direction=='ENTRY':
-                allowed=db.scalar(select(Plate).where(Plate.plate==plate,Plate.enabled.is_(True)))
-                if not allowed:
-                    raise ValueError('此車牌不在允許入場的白名單')
                 if db.scalar(select(Visit.id).where(Visit.plate==plate,Visit.left_at.is_(None))):
                     raise ValueError('此車牌已有在場紀錄')
                 if self.used_slots(db,st)>=CAPACITY and st.permit_plate!=plate:
@@ -262,7 +286,7 @@ class ParkingController:
             self.event(db,'AUTHORIZE',f'{plate} {("進場" if direction=="ENTRY" else "離場")}驗證成功')
             return {'plate':plate,'direction':direction,'valid_seconds':PERMIT_SECONDS}
 
-    def gate_action(self,action):
+    def gate_action(self,action,client_plate=None):
         if action not in ('OPEN','CLOSE'):
             raise ValueError('閘門操作錯誤')
         with self.lock,self.Session.begin() as db:
@@ -271,6 +295,13 @@ class ParkingController:
             if action=='OPEN':
                 if st.phase!='WAIT_SECOND' or not st.permit_plate or not st.permit_expires or st.permit_expires<utcnow():
                     raise ValueError('必須先完成有效車牌授權才能開閘')
+                allowed=db.scalar(select(Plate).where(Plate.plate==st.permit_plate,Plate.enabled.is_(True)))
+                if not allowed or (st.mode=='HARDWARE' and allowed.note in (DEMO_NOTE, '範例車輛')):
+                    raise ValueError('車牌未通過白名單驗證或已停用，禁止開閘')
+                if client_plate is not None and normal_plate(client_plate) != st.permit_plate:
+                    raise ValueError('輸入車牌與剛才授權的車牌不一致，請重新驗證')
+                if not st.first_sensor or not st.sensors.get(st.first_sensor):
+                    raise ValueError('方向感測器已清空，請重新偵測車輛後再驗證')
             else:
                 if any(st.sensors.get(k) for k in ('A','B','S')):
                     raise ValueError('A / B / S 尚有物體，禁止關閉閘門')

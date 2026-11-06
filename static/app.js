@@ -42,6 +42,12 @@ function paint(s) {
   document.querySelectorAll('.mode-choice').forEach(el=>el.classList.toggle('chosen',el.dataset.mode===s.mode));
   document.querySelectorAll('.sensor-toggle').forEach(el=>{const v=s.sensors[el.dataset.sensor];el.classList.toggle('active',v);el.disabled=s.mode!=='SIM';const tag=el.querySelector('.sensor-indicator');tag.textContent=v?'已觸發':'未觸發';});
   $('resetSim').disabled=s.mode!=='SIM';
+  $('resetAllSim').disabled=s.mode!=='SIM';
+  const unlocked=s.phase==='WAIT_SECOND' && !!s.permit_plate && s.permit_plate===$('passPlate').value.trim().toUpperCase();
+  $('gateOpen').disabled=!unlocked;
+  const lock=$('gateLockNotice');
+  lock.classList.toggle('hidden',unlocked || s.gate==='OPEN');
+  lock.textContent=s.phase==='IDLE'?'🔒 請先觸發 A 或 B，再完成白名單驗證。':'🔒 尚未通過白名單驗證，或輸入車牌與授權不一致：禁止開閘。';
 }
 function gateLabel(g) {return ({CLOSED:'已關閉',OPEN:'已開啟',OPENING:'開啟中',CLOSING:'關閉中',UNKNOWN:'狀態未知'})[g]||g;}
 function phaseLabel(p) {return ({IDLE:'等待車輛',WAIT_SECOND:'等待驗證與通過',CROSSING:'通過中，等待清空',ALERT:'異常／需確認'})[p]||p;}
@@ -56,9 +62,15 @@ document.querySelectorAll('.space').forEach(el=>el.addEventListener('click',()=>
 document.querySelectorAll('.nav-item').forEach(el=>el.addEventListener('click',()=>showPage(el.dataset.page)));
 $('mobileMenu').addEventListener('click',()=>document.querySelector('.sidebar').classList.toggle('open'));
 $('authorize').addEventListener('click',async()=>{const r=await change('/api/passage/authorize',{plate:$('passPlate').value});if(r)showToast(`${r.plate}：${r.direction==='ENTRY'?'進場':'離場'}驗證通過`);});
-$('gateOpen').addEventListener('click',async()=>{const r=await change('/api/gate/open',{});if(r)showToast('開閘操作已送出');});
+$('passPlate').addEventListener('input',()=>{if(last)paint(last);});
+$('gateOpen').addEventListener('click',async()=>{const r=await change('/api/gate/open',{plate:$('passPlate').value});if(r)showToast('開閘操作已送出');});
 $('gateClose').addEventListener('click',async()=>{const r=await change('/api/gate/close',{});if(r)showToast('關閘操作已送出');});
 $('resetSim').addEventListener('click',async()=>{if(confirm('確定重設模擬感測器與閘門？進出紀錄不會刪除。')){await change('/api/sim/reset',{});}});
+$('resetAllSim').addEventListener('click',async()=>{
+  if(!confirm('⚠ 確定清空所有模擬資料？\n這會永久刪除進出紀錄、系統事件、待處理命令及自訂白名單，並恢復預設五組示範車牌。此操作無法復原。'))return;
+  const result=await change('/api/sim/reset-all',{confirmation:'RESET_SIM_ALL'});
+  if(result){$('passPlate').value='';await refreshPlates();await refreshRecords();showToast('已清空所有模擬資料，並恢復預設五組白名單');}
+});
 $('addPlateForm').addEventListener('submit',async e=>{e.preventDefault();const r=await change('/api/plates',{plate:$('newPlate').value,note:$('plateNote').value});if(r){$('newPlate').value='';$('plateNote').value='';refreshPlates();showToast('已儲存車牌白名單');}});
 $('platesTable').addEventListener('click',async e=>{const plate=e.target.dataset.remove;if(plate&&confirm(`確定停用 ${plate}？`)){const r=await change('/api/plates/'+encodeURIComponent(plate),undefined,'DELETE');if(r)refreshPlates();}});
 $('refreshRecords').addEventListener('click',refreshRecords);

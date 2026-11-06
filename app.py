@@ -177,6 +177,14 @@ def create_app(test_config=None):
         controller.reset_sim()
         return jsonify(ok=True)
 
+    @app.post('/api/sim/reset-all')
+    @protect
+    def sim_reset_all():
+        if payload().get('confirmation') != 'RESET_SIM_ALL':
+            raise ValueError('請先確認要清空所有模擬資料')
+        controller.reset_all_sim()
+        return jsonify(ok=True)
+
     @app.post('/api/passage/authorize')
     @protect
     def authorize():
@@ -187,7 +195,9 @@ def create_app(test_config=None):
     def gate(action):
         if action not in ('open','close'):
             raise ValueError('不支援的閘門操作')
-        return jsonify(ok=True, **controller.gate_action(action.upper()))
+        # Bind the opening command to the plate currently shown in the UI.
+        current_plate = payload().get('plate') if action == 'open' else None
+        return jsonify(ok=True, **controller.gate_action(action.upper(),client_plate=current_plate))
 
     @app.post('/api/device/state')
     @device_protect('DEVICE_TOKEN')
